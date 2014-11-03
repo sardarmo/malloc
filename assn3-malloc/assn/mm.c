@@ -24,15 +24,15 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "",
+    "a",
     /* First member's full name */
-    "",
+    "a",
     /* First member's email address */
-    "",
+    "a",
     /* Second member's full name (leave blank if none) */
-    "",
+    "a",
     /* Second member's email address (leave blank if none) */
-    ""
+    "a"
 };
 
 /*************************************************************************
