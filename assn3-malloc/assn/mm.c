@@ -24,7 +24,7 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "Fateh's Allocator",
+    "Allocator",
     /* First member's full name */
     "Fateh Singh",
     /* First member's email address */
@@ -75,6 +75,9 @@ team_t team = {
 void* heap_listp = NULL;
 void* free_listp = NULL;
 
+void add_block(void *bp);
+void remove_block(void *bp);
+
 /**********************************************************
  * mm_init
  * Initialize the heap, including "allocation" of the
@@ -121,6 +124,7 @@ void *coalesce(void *bp)
 
     else if (prev_alloc && !next_alloc) { /* Case 2 */
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+	remove_block(bp);
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
         return (bp);
@@ -128,6 +132,7 @@ void *coalesce(void *bp)
 
     else if (!prev_alloc && next_alloc) { /* Case 3 */
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+	remove_block(PREV_BLKP(bp));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         return (PREV_BLKP(bp));
@@ -136,6 +141,8 @@ void *coalesce(void *bp)
     else {            /* Case 4 */
         size += GET_SIZE(HDRP(PREV_BLKP(bp)))  +
             GET_SIZE(FTRP(NEXT_BLKP(bp)))  ;
+	remove_block(PREV_BLKP(bp));
+	remove_block(NEXT_BLKP(bp));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size,0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size,0));
         return (PREV_BLKP(bp));
@@ -180,23 +187,29 @@ void remove_block(void *bp) {
 
 void split_and_place(void* bp, size_t asize)
 {
-	size_t old_f_size = GET_SIZE(HDRP(bp));
+	size_t total_size = GET_SIZE(HDRP(bp));
 	size_t fsize = GET_SIZE(HDRP(bp)) - asize;
-    remove_block(bp);
 
-	PUT(HDRP(bp), PACK(asize, 1));
-	PUT(FTRP(bp), PACK(asize, 1));
+	if ( fsize >= MINIMUM) {        
+        	remove_block(bp);	// Remove from free list.
 
-	void *next_bp = NEXT_BLKP(bp);
-	PUT(HDRP(next_bp), PACK(fsize, 0));
-	PUT(next_bp, 0);
-	PUT(next_bp + WSIZE, 0);
-	PUT(FTRP(next_bp), PACK(fsize, 0));
-    old_f_size++;
+		PUT(HDRP(bp), PACK(asize, 1));
+		PUT(FTRP(bp), PACK(asize, 1));
 
-    size_t size = GET_SIZE(HDRP(next_bp));
-    size++;
-	add_block(next_bp);
+		void *next_bp = NEXT_BLKP(bp);
+		PUT(HDRP(next_bp), PACK(fsize, 0));
+		PUT(next_bp, 0);
+		PUT(next_bp + WSIZE, 0);
+		PUT(FTRP(next_bp), PACK(fsize, 0));
+		
+		//next_bp = coalesce(next_bp); // Coalesce split block.
+		add_block(next_bp);	// Add split block to free list.
+	} else {
+		/* No space for free block, can't split */
+		PUT(HDRP(bp), PACK(total_size, 1));
+		PUT(FTRP(bp), PACK(total_size, 1));
+		remove_block(bp);	// Remove from free list.
+	}
 }
 
 /**********************************************************
@@ -230,7 +243,9 @@ void *extend_heap(size_t words)
 
     return bp;
     /* Coalesce if the previous block was free */
-    //return coalesce(bp);
+    //bp = coalesce(bp);
+   // add_block(bp);
+   // return bp;
 }
 
 
@@ -283,7 +298,8 @@ void mm_free(void *bp)
 
     add_block(bp);
     // get rid of coalesce
-    // coalesce(bp);
+    //bp = coalesce(bp);
+    //add_block(bp);
 }
 
 /**********************************************************
