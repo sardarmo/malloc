@@ -41,7 +41,7 @@ team_t team = {
 *************************************************************************/
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
-#define CHUNKSIZE   (1<<7)      /* initial heap size (bytes) */
+#define CHUNKSIZE   (1<<12)      /* initial heap size (bytes) */
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
 
@@ -83,6 +83,7 @@ void *free_listps[NUM_FREE_LISTS];
 void add_block(void *bp);
 void remove_block(void *bp);
 void *extend_heap(size_t words);
+void *coalesce(void *bp);
 
 /**********************************************************
  * mm_init
@@ -190,7 +191,6 @@ void split_and_place(void* bp, size_t asize)
 
 	/* Ensure that there is enough space for a free block if we split */
 	if (fsize >= MINIMUM) {
-
 		/* Set up allocated block after split */
 		remove_block(bp);					// Remove allocated block from free list
 		PUT(HDRP(bp), PACK(asize, 1));		// header
@@ -218,72 +218,39 @@ void split_and_place(void* bp, size_t asize)
  * and reallocate its new header
  **********************************************************/
 
-void *adjust_size(char *bp, size_t asize) {
-	void *prev_ftrp = mem_heap_hi() + 1 - DSIZE;
-	size_t prev_size = GET_SIZE(prev_ftrp);
-	void *prev_bp = prev_ftrp + DSIZE - prev_size;
-	int prev_alloc = GET_ALLOC(HDRP(prev_bp));
-	if (!prev_alloc) {
-		size_t prev_size = GET_SIZE(HDRP(prev_bp));
-		bp = prev_bp;
-		if (asize > prev_size) {
-			asize = asize - prev_size;
-		}
-//		else {
-//			printf("case 2 \n");
-//			fflush(stdout);
-//
-//		    PUT(HDRP(bp), PACK(asize, 0));	// header
-//		    PUT(bp, 0);						// prev ptr
-//		    PUT(bp + (1 * WSIZE), 0);		// next ptr
-//		    PUT(FTRP(bp), PACK(asize, 0));	// footer
-//
-//		    void *next_bp = NEXT_BLKP(bp);
-//		    PUT(HDRP(next_bp), PACK(prev_size - asize, 0));
-//		    PUT(next_bp, 0);						// prev ptr
-//		    PUT(next_bp + (1 * WSIZE), 0);		// next ptr
-//		    PUT(FTRP(next_bp), PACK(prev_size - asize, 0));	// footer
-//		    PUT(FTRP(next_bp) + WSIZE, 1);		// epilogue
-//
-//			return bp;
-//		}
-	}
-
-    if ((bp = mem_sbrk(asize)) == (void *)-1 )
-        return NULL;
-
-    PUT(HDRP(bp), PACK(asize, 0));	// header
-    PUT(bp, 0);						// prev ptr
-    PUT(bp + (1 * WSIZE), 0);		// next ptr
-    PUT(FTRP(bp), PACK(asize, 0));	// footer
-    PUT(FTRP(bp) + WSIZE, 1);		// epilogue
-    return bp;
-}
-
 void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
+	void *prev_ftrp = mem_heap_hi() + 1 - DSIZE;
+	size_t prev_size = GET_SIZE(prev_ftrp);
+	int prev_alloc = GET_ALLOC(prev_ftrp);
+	void *prev_bp = prev_ftrp + DSIZE - prev_size;
 
     /* Allocate an even number of words to maintain alignments */
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
 
-    bp = adjust_size(bp, size);
-    //printf("asize = %Lu \n", asize);
-    //fflush(stdout);
-//    if ((bp = mem_sbrk(size)) == (void *)-1 )
-//        return NULL;
-//
-//    PUT(HDRP(bp), PACK(size, 0));	// header
-//    PUT(bp, 0);						// prev ptr
-//    PUT(bp + (1 * WSIZE), 0);		// next ptr
-//    PUT(FTRP(bp), PACK(size, 0));	// footer
-//    PUT(FTRP(bp) + WSIZE, 1);		// epilogue
+    /* Instead of having to extend the heap by size,
+     * we can make use of the last free block in the heap.
+     * Then we would only need to extend the heap by (size - free_size).
+     */
+	if (!prev_alloc && size > prev_size) {
+		bp = prev_bp;
+		size = size - prev_size;
+	}
+
+    if ((bp = mem_sbrk(size)) == (void *)-1 )
+        return NULL;
+
+    PUT(HDRP(bp), PACK(size, 0));	// header
+    PUT(bp, 0);						// prev ptr
+    PUT(bp + (1 * WSIZE), 0);		// next ptr
+    PUT(FTRP(bp), PACK(size, 0));	// footer
+    PUT(FTRP(bp) + WSIZE, 1);		// epilogue
 
     /* Coalesce if the previous block was free */
     return coalesce(bp);
 }
-
 
 /**********************************************************
  * find_fit
@@ -309,14 +276,12 @@ void * find_fit(size_t asize)
 {
 	/* Use prev and next pntr to traverse through free list */
     void *next_ptr;
-    int j=0;
     for (next_ptr = free_listp; next_ptr != NULL; next_ptr = NEXT_FREEP(next_ptr))
     {
         if (!GET_ALLOC(HDRP(next_ptr)) && (asize <= GET_SIZE(HDRP(next_ptr))))
         {
             return next_ptr;
         }
-        j++;
     }
     return NULL;
 }
@@ -496,6 +461,15 @@ void *mm_realloc(void *ptr, size_t size)
     	PUT(FTRP(prev_bp), PACK(prev_size + old_size + next_size, 1));
     	realloc_split(prev_bp, asize);
     	return prev_bp;
+    }
+
+
+    /* If heap needs to be extended, do it here */
+    if (GET_SIZE(HDRP(NEXT_BLKP(oldptr))) == 0) {
+    	printf("sadfasd\n");
+    }
+    if (!next_alloc && GET_SIZE(HDRP(NEXT_BLKP(NEXT_BLKP(oldptr)))) == 0) {
+    	printf("fasdfsd\n");
     }
 
     /* Case 6, must allocate more memory */
