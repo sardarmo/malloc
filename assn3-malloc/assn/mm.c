@@ -217,6 +217,49 @@ void split_and_place(void* bp, size_t asize)
  * requirements of course. Free the former epilogue block
  * and reallocate its new header
  **********************************************************/
+
+void *adjust_size(char *bp, size_t asize) {
+	void *prev_ftrp = mem_heap_hi() + 1 - DSIZE;
+	size_t prev_size = GET_SIZE(prev_ftrp);
+	void *prev_bp = prev_ftrp + DSIZE - prev_size;
+	int prev_alloc = GET_ALLOC(HDRP(prev_bp));
+	if (!prev_alloc) {
+		size_t prev_size = GET_SIZE(HDRP(prev_bp));
+		bp = prev_bp;
+		if (asize > prev_size) {
+			asize = asize - prev_size;
+		}
+//		else {
+//			printf("case 2 \n");
+//			fflush(stdout);
+//
+//		    PUT(HDRP(bp), PACK(asize, 0));	// header
+//		    PUT(bp, 0);						// prev ptr
+//		    PUT(bp + (1 * WSIZE), 0);		// next ptr
+//		    PUT(FTRP(bp), PACK(asize, 0));	// footer
+//
+//		    void *next_bp = NEXT_BLKP(bp);
+//		    PUT(HDRP(next_bp), PACK(prev_size - asize, 0));
+//		    PUT(next_bp, 0);						// prev ptr
+//		    PUT(next_bp + (1 * WSIZE), 0);		// next ptr
+//		    PUT(FTRP(next_bp), PACK(prev_size - asize, 0));	// footer
+//		    PUT(FTRP(next_bp) + WSIZE, 1);		// epilogue
+//
+//			return bp;
+//		}
+	}
+
+    if ((bp = mem_sbrk(asize)) == (void *)-1 )
+        return NULL;
+
+    PUT(HDRP(bp), PACK(asize, 0));	// header
+    PUT(bp, 0);						// prev ptr
+    PUT(bp + (1 * WSIZE), 0);		// next ptr
+    PUT(FTRP(bp), PACK(asize, 0));	// footer
+    PUT(FTRP(bp) + WSIZE, 1);		// epilogue
+    return bp;
+}
+
 void *extend_heap(size_t words)
 {
     char *bp;
@@ -224,17 +267,21 @@ void *extend_heap(size_t words)
 
     /* Allocate an even number of words to maintain alignments */
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-    if ( (bp = mem_sbrk(size)) == (void *)-1 )
-        return NULL;
 
-    PUT(HDRP(bp), PACK(size, 0));	// header
-    PUT(bp, 0);						// prev ptr
-    PUT(bp + (1 * WSIZE), 0);		// next ptr
-    PUT(FTRP(bp), PACK(size, 0));	// footer
-    PUT(FTRP(bp) + WSIZE, 1);		// epilogue
+    bp = adjust_size(bp, size);
+    //printf("asize = %Lu \n", asize);
+    //fflush(stdout);
+//    if ((bp = mem_sbrk(size)) == (void *)-1 )
+//        return NULL;
+//
+//    PUT(HDRP(bp), PACK(size, 0));	// header
+//    PUT(bp, 0);						// prev ptr
+//    PUT(bp + (1 * WSIZE), 0);		// next ptr
+//    PUT(FTRP(bp), PACK(size, 0));	// footer
+//    PUT(FTRP(bp) + WSIZE, 1);		// epilogue
 
     /* Coalesce if the previous block was free */
-     return coalesce(bp);
+    return coalesce(bp);
 }
 
 
@@ -262,12 +309,14 @@ void * find_fit(size_t asize)
 {
 	/* Use prev and next pntr to traverse through free list */
     void *next_ptr;
+    int j=0;
     for (next_ptr = free_listp; next_ptr != NULL; next_ptr = NEXT_FREEP(next_ptr))
     {
         if (!GET_ALLOC(HDRP(next_ptr)) && (asize <= GET_SIZE(HDRP(next_ptr))))
         {
             return next_ptr;
         }
+        j++;
     }
     return NULL;
 }
@@ -327,7 +376,7 @@ void *mm_malloc(size_t size)
 
     /* No fit found. Get more memory and place the block */
     extendsize = MAX(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
+    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
     split_and_place(bp, asize);
     return bp;
@@ -339,13 +388,15 @@ void *mm_malloc(size_t size)
  * Implemented simply in terms of mm_malloc and mm_free
  *********************************************************/
 
+/* Helper function for mm_realloc.
+ * Splits an allocated block to produce a free block (if possible).
+ */
 void realloc_split(void *bp, size_t asize) {
 	size_t total_size = GET_SIZE(HDRP(bp));
 	size_t fsize = GET_SIZE(HDRP(bp)) - asize;
 
 	/* Ensure that there is enough space for a free block if we split */
 	if (fsize >= MINIMUM) {
-
 		/* Set up allocated block after split */
 		PUT(HDRP(bp), PACK(asize, 1));		// header
 		PUT(FTRP(bp), PACK(asize, 1));		// footer
@@ -388,6 +439,7 @@ void *mm_realloc(void *ptr, size_t size)
     {
     	asize = DSIZE * ((size + (DSIZE) + (DSIZE-1))/ DSIZE);
     }
+
     /* Case 1, no need to re-alloc the same block size */
     if (asize == old_size) {
     	return oldptr;
@@ -399,77 +451,54 @@ void *mm_realloc(void *ptr, size_t size)
     size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(oldptr)));
     size_t copySize;
 
-    /* Case 2, there is a free block after re-alloc big enough to use */
-    size_t new_size;
+    /* Case 2, block size is less then previously allocated block size */
     if (asize < old_size) {
     	realloc_split(oldptr, asize);
     	return oldptr;
 	}
 
-//    if (!prev_alloc && next_alloc && (asize <= (prev_size + old_size))) {
-//    	void *prev_bp = PREV_BLKP(oldptr);
-//
-//    	copySize = GET_SIZE(HDRP(oldptr));
-//        if (size < copySize)
-//          copySize = size;
-//    	memmove(prev_bp, oldptr, copySize);
-//
-//    	PUT(HDRP(prev_bp), PACK(prev_size + old_size, 1));
-//    	PUT(FTRP(prev_bp), PACK(prev_size + old_size, 1));
-//    	return prev_bp;
-//    }
+    /* Case 3, prev block is free, and (previous block + old block) is big enough */
+    if (!prev_alloc && next_alloc && (asize <= (prev_size + old_size))) {
+    	void *prev_bp = PREV_BLKP(oldptr);
+    	remove_block(prev_bp);	// remove the prev block from the free list
 
-//    else if (prev_alloc && !next_alloc && (asize <= (old_size + next_size))) {
-//    	printf("i just came to say hello 1 \n");
-//    	new_size = old_size + next_size;
-//    	remove_block(NEXT_BLKP(oldptr));
-//
-//    	PUT(HDRP(oldptr), PACK(new_size, 0));
-//    	PUT(FTRP(oldptr), PACK(new_size, 0));
-//
-//    	realloc_split(oldptr, asize);
-//
-//    	return oldptr;
-//    } else if (!prev_alloc && next_alloc && (asize <= (prev_size + old_size))) {
-//    	printf("i just came to say hello 2 \n");
-//    	new_size = prev_size + old_size;
-//    	void * prev_ptr = PREV_BLKP(oldptr);
-//
-//    	char buffer[size];
-//    	memcpy(buffer, oldptr, size);
-//    	memcpy(prev_ptr, &buffer, size);
-//    	void *r = &buffer[0];
-//    	int i = 0;
-//    	for (i = 0; i < size; i++) {
-//    		char prev = *((char *)prev_ptr + i);
-//    		char curr = *((char *)buffer + i);
-//    		if (prev != curr) {
-//    			printf("byte %d didnt match prev size %Lu oldptr size %Lu copy size %Lu\n", i, prev_size, old_size, size);
-//    		}
-//    	}
-//
-//    	PUT(HDRP(prev_ptr), PACK(new_size, 1));
-//    	PUT(FTRP(prev_ptr), PACK(new_size, 1));
-//
-//    	//realloc_split(prev_ptr, asize);
-//
-//    	return prev_ptr;
-//    } else if (!prev_alloc && !next_alloc && (asize <= (prev_size + old_size + next_size))) {
-//    	printf("i just came to say hello 3 \n");
-//    	new_size = prev_size + old_size + next_size;
-//    	void * prev_ptr = PREV_BLKP(oldptr);
-//
-//    	char buffer[size];
-//    	memcpy(buffer, oldptr, size);
-//    	memcpy(prev_ptr, oldptr, size);
-//
-//    	PUT(HDRP(prev_ptr), PACK(new_size, 1));
-//    	PUT(FTRP(prev_ptr), PACK(new_size, 1));
-//
-//    	//realloc_split(prev_ptr, asize);
-//    	return prev_ptr;
-//    }
+    	/* Shift data backwards */
+    	memmove(prev_bp, oldptr, old_size - DSIZE);
 
+    	PUT(HDRP(prev_bp), PACK(prev_size + old_size, 1));
+    	PUT(FTRP(prev_bp), PACK(prev_size + old_size, 1));
+    	realloc_split(prev_bp, asize);
+    	return prev_bp;
+    }
+
+    /* Case 4, next block is free and (old block + next block) is big enough */
+    if (prev_alloc && !next_alloc && (asize <= (old_size + next_size))) {
+    	void *next_bp = NEXT_BLKP(oldptr);
+    	remove_block(next_bp); // remove next block from free list
+
+    	PUT(HDRP(oldptr), PACK(old_size + next_size, 1));
+    	PUT(FTRP(oldptr), PACK(old_size + next_size, 1));
+    	realloc_split(oldptr, asize);
+    	return oldptr;
+    }
+
+    /* Case 5, prev block and next block is free and (prev block + old block + next block) is big enough */
+    if (!prev_alloc && !next_alloc && (asize <= (prev_size + old_size + next_size))) {
+    	void *prev_bp = PREV_BLKP(oldptr);
+    	void *next_bp = NEXT_BLKP(oldptr);
+    	remove_block(prev_bp);
+    	remove_block(next_bp);
+
+    	/* Shift data backwards */
+    	memmove(prev_bp, oldptr, old_size - DSIZE);
+
+    	PUT(HDRP(prev_bp), PACK(prev_size + old_size + next_size, 1));
+    	PUT(FTRP(prev_bp), PACK(prev_size + old_size + next_size, 1));
+    	realloc_split(prev_bp, asize);
+    	return prev_bp;
+    }
+
+    /* Case 6, must allocate more memory */
     void *newptr;
     newptr = mm_malloc(size);
     if (newptr == NULL)
@@ -497,6 +526,7 @@ int mm_check(void){
  * place
  * Mark the block as allocated*
  **********************************************************/
+/* Deprecated functionality */
 void place(void* bp, size_t asize)
 {
   /* Get the current block size */
