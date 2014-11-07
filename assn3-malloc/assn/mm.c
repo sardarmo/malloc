@@ -41,7 +41,7 @@ team_t team = {
 *************************************************************************/
 #define WSIZE       sizeof(void *)            /* word size (bytes) */
 #define DSIZE       (2 * WSIZE)            /* doubleword size (bytes) */
-#define CHUNKSIZE   (1<<12)      /* initial heap size (bytes) */
+#define CHUNKSIZE   (1 << 12)      /* initial heap size (bytes) */
 
 #define MAX(x,y) ((x) > (y)?(x) :(y))
 
@@ -234,7 +234,7 @@ void *extend_heap(size_t words)
      * we can make use of the last free block in the heap.
      * Then we would only need to extend the heap by (size - free_size).
      */
-	if (!prev_alloc && size > prev_size) {
+	if (!prev_alloc) {
 		bp = prev_bp;
 		size = size - prev_size;
 	}
@@ -422,7 +422,37 @@ void *mm_realloc(void *ptr, size_t size)
     	return oldptr;
 	}
 
-    /* Case 3, prev block is free, and (previous block + old block) is big enough */
+    /* Case 3, next block is free and (old block + next block) is big enough */
+    if (prev_alloc && !next_alloc && (asize <= (old_size + next_size))) {
+    	void *next_bp = NEXT_BLKP(oldptr);
+    	remove_block(next_bp); // remove next block from free list
+
+    	PUT(HDRP(oldptr), PACK(old_size + next_size, 1));
+    	PUT(FTRP(oldptr), PACK(old_size + next_size, 1));
+    	realloc_split(oldptr, asize);
+    	return oldptr;
+    }
+
+    /* If heap needs to be extended, do it here */
+    if (GET_SIZE(HDRP(NEXT_BLKP(oldptr))) == 0) {
+    	size_t extend_size = asize - old_size;
+    	void *bp;
+		if ((bp = mem_sbrk(extend_size)) == (void *)-1 )
+			return NULL;
+
+		PUT(HDRP(oldptr), PACK(asize, 1));		// header
+		PUT(bp, 0);								// prev ptr
+		PUT(bp + (1 * WSIZE), 0);				// next ptr
+		PUT(FTRP(oldptr), PACK(asize, 1));		// footer
+		PUT(FTRP(oldptr) + WSIZE, 1);			// epilogue
+		return oldptr;
+    }
+
+    if (!next_alloc && GET_SIZE(HDRP(NEXT_BLKP(NEXT_BLKP(oldptr)))) == 0) {
+    	//printf("fasdfsd\n");
+    }
+
+    /* Case 4, prev block is free, and (previous block + old block) is big enough */
     if (!prev_alloc && next_alloc && (asize <= (prev_size + old_size))) {
     	void *prev_bp = PREV_BLKP(oldptr);
     	remove_block(prev_bp);	// remove the prev block from the free list
@@ -434,17 +464,6 @@ void *mm_realloc(void *ptr, size_t size)
     	PUT(FTRP(prev_bp), PACK(prev_size + old_size, 1));
     	realloc_split(prev_bp, asize);
     	return prev_bp;
-    }
-
-    /* Case 4, next block is free and (old block + next block) is big enough */
-    if (prev_alloc && !next_alloc && (asize <= (old_size + next_size))) {
-    	void *next_bp = NEXT_BLKP(oldptr);
-    	remove_block(next_bp); // remove next block from free list
-
-    	PUT(HDRP(oldptr), PACK(old_size + next_size, 1));
-    	PUT(FTRP(oldptr), PACK(old_size + next_size, 1));
-    	realloc_split(oldptr, asize);
-    	return oldptr;
     }
 
     /* Case 5, prev block and next block is free and (prev block + old block + next block) is big enough */
@@ -461,15 +480,6 @@ void *mm_realloc(void *ptr, size_t size)
     	PUT(FTRP(prev_bp), PACK(prev_size + old_size + next_size, 1));
     	realloc_split(prev_bp, asize);
     	return prev_bp;
-    }
-
-
-    /* If heap needs to be extended, do it here */
-    if (GET_SIZE(HDRP(NEXT_BLKP(oldptr))) == 0) {
-    	printf("sadfasd\n");
-    }
-    if (!next_alloc && GET_SIZE(HDRP(NEXT_BLKP(NEXT_BLKP(oldptr)))) == 0) {
-    	printf("fasdfsd\n");
     }
 
     /* Case 6, must allocate more memory */
